@@ -415,55 +415,72 @@ print(f'''
         return false;
 ''')
 
+# The MODBUS docs and latest manual don't agree on all the error codes :/
 alarms = {
-     7: "Alarm: F08 GFDI_Relay_Failure",
-    12: "Alarm: F13 Grid_Mode_changed",
-    13: "Alarm: F14 DC_OverCurr_Fault",
-    14: "Alarm: F15 SW_AC_OverCurr_Fault",
-    15: "Alarm: F16 GFCI_Failure",
-    17: "Alarm: F18 HW_Ac_OverCurr_Fault",
-    19: "Alarm: F20 Tz_Dc_OverCurr_Fault",
-    21: "Alarm: F22 Tz_EmergStop_Fault",
-    22: "Alarm: F23 Tz_GFCI_OC_Fault",
-    23: "Alarm: F24 DC_Insulation_ISO_Fault",
-    25: "Alarm: F26 BusUnbalance_Fault",
-    28: "Alarm: F29 Parallel_Fault",
-    32: "Alarm: F33 AC_OverCurr_Fault",
-    33: "Alarm: F34 AC_Overload_Fault",
-    40: "Alarm: F41 AC_WU_OverVolt_Fault",
-    42: "Alarm: F43 AC_VW_OverVolt_Fault",
-    44: "Alarm: F45 AC_UV_OverVolt_Fault",
-    45: "Alarm: F46 Parallel_Aux_Fault",
-    46: "Alarm: F47 AC_OverFreq_Fault",
-    47: "Alarm: F48 AC_UnderFreq_Fault",
-    54: "Alarm: F55 DC_VoltHigh_Fault",
-    55: "Alarm: F56 DC_VoltLow_Fault",
-    57: "Alarm: F58 AC_U_GridCurr_High_Fault",
-    60: "Alarm: F61 Button_Manual_OFF",
-    61: "Alarm: F62 AC_B_InductCurr_High_Fault",
-    62: "Alarm: F63 Arc_Fault",
-    63: "Alarm: F64 Heatsink_HighTemp_Fault",
+     0: "DC_Inversed_Failure",
+     7: "GFDI_Relay_Failure",
+    12: "Grid_Mode_changed",
+    13: "DC_OverCurr_Fault",
+    14: "AC_OverCurr_Failure",
+    15: "GFCI_Failure",
+    17: "HW_Ac_OverCurr_Fault",
+    19: "Tz_Dc_OverCurr_Fault",
+    21: "Tz_EmergStop_Fault",
+    22: "Tz_GFCI_OC_Fault",
+    23: "DC_Insulation_ISO_Fault",
+    24: "DC_Feedback_Fault",
+    25: "BusUnbalance_Fault",
+    28: "Parallel_Fault",
+    30: "Soft_Start_Failed",
+    32: "AC_OverCurr_Fault",
+    33: "AC_Overload_Fault",
+    34: "AC_NoUtility_Fault",
+    36: "DCLLC_Soft_Over_Cur",
+    38: "DCLLC_Over_Current",
+    39: "Batt_Over_Current",
+    40: "AC_WU_OverVolt_Fault", # F41 Parallel_System_Stop_Fault - If one system faults in parallel, this normal fault will register on the other units as they disconnect fromthe grid.
+    42: "AC_VW_OverVolt_Fault",
+    44: "AC_UV_OverVolt_Fault",
+    45: "Parallel_Aux_Fault",  # F46 Battery_Backup_Fault - Cannot communicate with other parallel systems. Check Master = 1, Slaves = 2-9 and that ethernet are connected.
+    46: "AC_OverFreq_Fault",
+    47: "AC_UnderFreq_Fault",
+    54: "DC_VoltHigh_Fault",
+    55: "DC_VoltLow_Fault",
+    57: "AC_U_GridCurr_High_Fault", # F58 BMS_Communication_Fault - Sol-Ark is programmed to BMS Lithium Battery Mode but cannot communicate with a BMS. BMS_Err_Stop is enabled, but cannot communicate with a battery BMS
+    59: "Gen_Volt_or_Fre_Fault",
+    60: "Button_Manual_OFF",
+    61: "AC_B_InductCurr_High_Fault",
+    62: "Arc_Fault",
+    63: "Heatsink_HighTemp_Fault",
 }
 
-# Setup alarms for any potential bit; even if undocumented
-for n in range(64):  # range will go 0-63
-    name = alarms[n] if n in alarms else f"Alarm: F{n+1:02} UNDOCUMENTED"
 
-    # since we can't access 103 as a single 4byte value, we have to fetch
-    # each register and reconfigure the alarm bit to match what it would be
-    # for that register instead
-    temp_bitmask_position = n
+# the modbus binarysensor only fetches a single word
+# so we can't read 4 registers, get a single 64bit value and bitmath against that
+# thus, we need to read of the registers and figure out what it would be if it WAS part
+#
+# I have also confirmed that the data is stored low word first; ie:
+#   combinedl = data['106'][2:].zfill(16) \
+#             + data['105'][2:].zfill(16) \
+#             + data['104'][2:].zfill(16) \
+#             + data['103'][2:].zfill(16)
+# is how you put together the data (if it's all strings of the binary data; see explore.py)
+
+for original_bitmask in range(64): # the original bit ranges
+
+    name = f'Alarm: F{original_bitmask + 1:02} ' + (alarms[original_bitmask] if original_bitmask in alarms else "UNDOCUMENTED")
+
+    modified_bitmask = original_bitmask
     address = 103
-    while temp_bitmask_position > 15:
-        temp_bitmask_position = temp_bitmask_position - 16
+    while modified_bitmask > 15:
+        modified_bitmask = modified_bitmask - 16
         address = address + 1
 
     print(f'''
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
-    name: "{name}"
-    address: {address}
     register_type: holding
-    bitmask: {format(1 << temp_bitmask_position, '#x')}  # position {str(n)}, adjusted to {temp_bitmask_position} for register {address}
-''')
+    name: "{name}"
+    address: {address}  # position {original_bitmask}, adjusted to {modified_bitmask} for register {address}
+    bitmask: {format(1 << modified_bitmask, '#x')}''')
 
