@@ -89,6 +89,8 @@ modbus_controller:
     then:
       - logger.log: "Commands sent!"
 
+### Stats Below!
+
 ''')
 
 # Begin the sensors; first text, then floats, then binary
@@ -111,7 +113,7 @@ print('''
     modbus_controller_id: modbus_client_sa
     name: "Generator side relay status"
     register_type: holding
-    address: 195    
+    address: 195
     raw_encode: HEXBYTES
     lambda: |-
       uint16_t value = modbus_controller::word_from_hex_str(x, 0);
@@ -119,7 +121,7 @@ print('''
         case 0: return std::string("Open");
         case 1: return std::string("Closed");
         case 2: return std::string("No Connection");
-        case 3: return std::string("Closed, Generator is on"); 
+        case 3: return std::string("Closed, Generator is on");
       }}
       return std::string("Unknown State");;
 ''')
@@ -137,6 +139,10 @@ kwhs = [
     (  74,  "Total Batt Discharge Power"      , "U_DWORD_R"),
     (  76,  "Day Grid Buy Power"              , "U_WORD"),
     (  77,  "Day Grid Sell Power"             , "U_WORD"),
+## I have no idea how to deal with this -- the split of the low/high values across non-sequential registers and the register in the middle is Grid Frequency.
+# | 78             | Total Grid Buy Power (Wh) low word          | R              | [0,65535]       | 0.1kwh         |                                                                                                                 |
+# | 80             | Total Grid Buy Power (Wh) high word         | R              | [0,65535]       | 0.1kwh         |                                                                                                                 |
+# EDIT: I kinda figured something out, but MAN it's a hack. See lower in the file...
     (  81,  "Total Grid Sell Power"           , "U_DWORD_R"),
     (  84,  "SG: Day Load Power"              , "U_WORD"),
     (  85,  "Total Load Power"                , "U_DWORD_R"),
@@ -150,17 +156,15 @@ for (address, name, word_type) in kwhs:
     modbus_controller_id: modbus_client_sa
     name: "{name}"
     address: {str(address)}
-    unit_of_measurement: "kwh"
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "total_increasing"
     register_type: holding
     value_type: {word_type}
     filters:
     - multiply: 0.1
 ''')
 
-## I have no idea how to deal with this -- the split the low/high values across non-sequential registers and the register in the middle is Grid Frequency.
-# | 78             | Total Grid Buy Power (Wh) low word          | R              | [0,65535]       | 0.1kwh         |                                                                                                                 |
-# | 80             | Total Grid Buy Power (Wh) high word         | R              | [0,65535]       | 0.1kwh         |                                                                                                                 |
-# EDIT: I kinda figured something out, but MAN it's a hack. See lower in the file...
 watts = [
     ( 166, "Gen or AC Coupled power input",     "S_WORD"),
     ( 167, "Grid side L1 power",                "S_WORD"),
@@ -188,7 +192,9 @@ for (address, name, word_type) in watts:
     modbus_controller_id: modbus_client_sa
     name: "{name}"
     address: {address}
-    unit_of_measurement: "watts"
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
     register_type: holding
     value_type: {word_type}
 ''')
@@ -218,6 +224,8 @@ for (address, name) in voltages:
     name: "{name}"
     address: {address}
     unit_of_measurement: "V"
+    device_class: "voltage"
+    state_class: "measurement"
     register_type: holding
     value_type: U_WORD
     filters:
@@ -232,6 +240,8 @@ print(f'''
     name: "Battery voltage"
     address: 183
     unit_of_measurement: "V"
+    device_class: "voltage"
+    state_class: "measurement"
     register_type: holding
     value_type: U_WORD
     filters:
@@ -246,6 +256,8 @@ print(f'''
     name: "Battery capacity SOC"
     address: 184
     unit_of_measurement: "%"
+    device_class: "battery"
+    state_class: "measurement"
     register_type: holding
     value_type: U_WORD
 ''')
@@ -258,6 +270,8 @@ print(f'''
     name: "Corrected Batt Capacity"
     address: 107
     unit_of_measurement: "Ah"
+    device_class: "energy_storage"
+    state_class: "measurement"
     register_type: holding
     value_type: U_WORD
 ''')
@@ -276,6 +290,8 @@ for (address, name) in pvamps:
     name: "{name}"
     address: {address}
     unit_of_measurement: "A"
+    device_class: "current"
+    state_class: "measurement"
     register_type: holding
     value_type: U_WORD
     filters:
@@ -293,7 +309,9 @@ print(f'''
     name: "IGBT Heat Sink"
     register_type: holding
     address: 91
-    unit_of_measurement: "C"
+    unit_of_measurement: "°C"
+    device_class: "temperature"
+    state_class: "measurement"
     value_type: U_WORD
     filters:
     - calibrate_linear:
@@ -305,11 +323,14 @@ print(f'''
     modbus_controller_id: modbus_client_sa
     name: "Battery temperature"
     address: 182
-    unit_of_measurement: "C"
+    unit_of_measurement: "°C"
+    device_class: "temperature"
+    state_class: "measurement"
     register_type: holding
     value_type: U_WORD
     filters:
-    - offset: -1000
+    #- offset: -1000  # the docs say to offset by 1000, but I was getting values like "250" when pulled raw
+    # which seems a whole lot more like *.1 instead.
     - multiply: 0.1
 ''')
 # pv amps
@@ -326,6 +347,8 @@ for (address, name) in hertz:
     name: "{name}"
     address: {address}
     unit_of_measurement: "Hz"
+    device_class: "frequency"
+    state_class: "measurement"
     register_type: holding
     value_type: U_WORD
     filters:
@@ -351,6 +374,8 @@ for (address, name) in otheramps:
     name: "{name}"
     address: {address}
     unit_of_measurement: "A"
+    device_class: "current"
+    state_class: "measurement"
     register_type: holding
     value_type: S_WORD
     filters:
@@ -377,7 +402,9 @@ print('''
     modbus_controller_id: modbus_client_sa
     name: "Total Grid Buy Power"
     address: 78
-    unit_of_measurement: "wh"
+    unit_of_measurement: "Wh"
+    device_class: "energy"
+    state_class: "total_increasing"
     register_type: holding
     register_count: 3
     accuracy_decimals: 1
@@ -480,6 +507,7 @@ for original_bitmask in range(64): # the original bit ranges
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
     register_type: holding
+    device_class: "safety"
     name: "{name}"
     address: {address}  # position {original_bitmask}, adjusted to {modified_bitmask} for register {address}
     bitmask: {format(1 << modified_bitmask, '#x')}''')
