@@ -402,7 +402,7 @@ print('''
     modbus_controller_id: modbus_client_sa
     name: "Total Grid Buy Power"
     address: 78
-    unit_of_measurement: "Wh"
+    unit_of_measurement: "kWh"
     device_class: "energy"
     state_class: "total_increasing"
     register_type: holding
@@ -414,7 +414,7 @@ print('''
                            | data[item->offset + 5] << 16
                            | data[item->offset + 0] << 8
                            | data[item->offset + 1];
-      return return_data * 100;
+      return return_data;
     filters:
       - multiply: 0.1
 
