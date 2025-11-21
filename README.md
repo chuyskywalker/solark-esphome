@@ -8,3 +8,12 @@ An ESPHome configuration for reading SolArk inverter data over Modbus
 `gen_test.py` is an awesome little esphome configuration generator that will create an espboard that can serve as a SolArk Inverter Dummy. Once it's booted up, you can access it's webpage and configure any of the registers you want to whatever values you want, allowing you to test the logic/import/read of the main modbus client generated above.
 
 Wiring diagram, pinouts, and specific devices are not included at this time.
+
+Generation: I use a quick docker container to run these scripts:
+
+```bash
+cd ~/your/checkout/directory
+docker run -ti --rm -v ./:/app python bash
+```
+
+Then execute `python gen_sa_yaml.py > output.yaml`, etc, etc.
