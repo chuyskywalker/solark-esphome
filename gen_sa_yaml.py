@@ -70,9 +70,9 @@ ethernet:
       value: 0x1FFA
       page_id: 0x07
   manual_ip:
-    static_ip: 192.168.1.90
-    gateway: 192.168.1.1
-    subnet: 255.255.255.0
+    static_ip: ${id_addr}
+    gateway: ${gateway}
+    subnet: ${subnet}
 
 web_server:
   port: 80
