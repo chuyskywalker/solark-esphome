@@ -32,6 +32,14 @@ esphome:
   project:
     name: esphome.web
     version: dev
+  # this is a bit of a hack; setting the status to online blindly.
+  # however, the offline'ing script will eventually clear it if, on startup, the modbus doesn't connect
+  on_boot:
+    priority: 600.0
+    then:
+      - binary_sensor.template.publish:
+          id: device_online_status
+          state: ON
 
 esp32:
   board: esp32dev
@@ -106,9 +114,17 @@ modbus_controller:
   on_online:
     then:
       - logger.log: "Controller back online!"
+      - binary_sensor.template.publish:
+          id: device_online_status
+          state: ON
+      - script.stop: modbus_watchdog
   on_offline:
     then:
       - logger.log: "Controller goes offline!"
+      - binary_sensor.template.publish:
+          id: device_online_status
+          state: OFF
+      - script.execute: modbus_watchdog
   on_command_sent:
     then:
       - logger.log: "Commands sent!"
@@ -179,7 +195,8 @@ for (address, name, word_type) in kwhs:
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
     name: "{name}"
-    address: {str(address)}
+    id: "sensor_{address}"
+    address: {address}
     unit_of_measurement: "kWh"
     device_class: "energy"
     state_class: "total_increasing"
@@ -215,6 +232,7 @@ for (address, name, word_type) in watts:
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
     name: "{name}"
+    id: "sensor_{address}"
     address: {address}
     unit_of_measurement: "W"
     device_class: "power"
@@ -246,6 +264,7 @@ for (address, name) in voltages:
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
     name: "{name}"
+    id: "sensor_{address}"
     address: {address}
     unit_of_measurement: "V"
     device_class: "voltage"
@@ -262,6 +281,7 @@ print(f'''
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
     name: "Battery voltage"
+    id: "sensor_183"
     address: 183
     unit_of_measurement: "V"
     device_class: "voltage"
@@ -278,6 +298,7 @@ print(f'''
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
     name: "Battery capacity SOC"
+    id: "sensor_184"
     address: 184
     unit_of_measurement: "%"
     device_class: "battery"
@@ -292,6 +313,7 @@ print(f'''
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
     name: "Corrected Batt Capacity"
+    id: "sensor_107"
     address: 107
     unit_of_measurement: "Ah"
     device_class: "energy_storage"
@@ -312,6 +334,7 @@ for (address, name) in pvamps:
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
     name: "{name}"
+    id: "sensor_{address}"
     address: {address}
     unit_of_measurement: "A"
     device_class: "current"
@@ -331,6 +354,7 @@ print(f'''
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
     name: "IGBT Heat Sink"
+    id: "sensor_91"
     register_type: holding
     address: 91
     unit_of_measurement: "°C"
@@ -346,6 +370,7 @@ print(f'''
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
     name: "Battery temperature"
+    id: "sensor_182"
     address: 182
     unit_of_measurement: "°C"
     device_class: "temperature"
@@ -369,6 +394,7 @@ for (address, name) in hertz:
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
     name: "{name}"
+    id: "sensor_{address}"
     address: {address}
     unit_of_measurement: "Hz"
     device_class: "frequency"
@@ -396,6 +422,7 @@ for (address, name) in otheramps:
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
     name: "{name}"
+    id: "sensor_{address}"
     address: {address}
     unit_of_measurement: "A"
     device_class: "current"
@@ -425,6 +452,7 @@ print('''
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
     name: "Total Grid Buy Power"
+    id: "sensor_78"
     address: 78
     unit_of_measurement: "kWh"
     device_class: "energy"
@@ -451,12 +479,20 @@ print('''
 binary_sensor:
 ''')
 
+print(f'''
+  - platform: template
+    name: "Modbus Device Status"
+    id: device_online_status
+    device_class: connectivity
+''')
+
 # relay on/off binary
 # | 194            | Grid side relay status                      | R              |                 |                | 1 is Open (Disconnect) 2 is Closed                                                                              |
 print(f'''
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
     name: "Grid side relay status"
+    id: "sensor_103"
     address: 103
     register_type: holding
     lambda: |-
@@ -536,3 +572,35 @@ for original_bitmask in range(64): # the original bit ranges
     address: {address}  # position {original_bitmask}, adjusted to {modified_bitmask} for register {address}
     bitmask: {format(1 << modified_bitmask, '#x')}''')
 
+# install a script that will NaN all the numbers if the system
+# goes "offline" so we don't report bogus data up to HomeAssistant
+print(f'''
+script:
+  - id: modbus_watchdog
+    mode: single 
+    then:
+      - delay: 5min # after the system goes "offline", this delays for 5 minutes to see if it was a fluke
+                    # the "online" will cancel this script (if running)
+      - logger.log: "Modbus timeout reached; resetting sensors"
+      - lambda: |-
+          // Force sensors to NaN (renders as 'unavailable' in Home Assistant)
+          ''')
+
+for (address, name, word_type) in kwhs:
+    print(f'''          id(sensor_{address}).publish_state(NAN);''')
+for (address, name, word_type) in watts:
+    print(f'''          id(sensor_{address}).publish_state(NAN);''')
+for (address, name) in voltages:
+    print(f'''          id(sensor_{address}).publish_state(NAN);''')
+for (address, name) in pvamps:
+    print(f'''          id(sensor_{address}).publish_state(NAN);''')
+for (address, name) in hertz:
+    print(f'''          id(sensor_{address}).publish_state(NAN);''')
+for (address, name) in otheramps:
+    print(f'''          id(sensor_{address}).publish_state(NAN);''')
+for (address) in [183, 184, 107, 91, 182, 78, 103]:  # manually derived sensors; nor part of above lists
+    print(f'''          id(sensor_{address}).publish_state(NAN);''')
+
+print(f'''
+      - logger.log: "...reset complete"
+''')
