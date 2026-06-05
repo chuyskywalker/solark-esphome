@@ -14,6 +14,7 @@ Generation: I use a quick docker container to run these scripts:
 ```bash
 cd ~/your/checkout/directory
 docker run -ti --rm -v ./:/app python bash
+cd /app
 ```
 
 Then execute `python gen_sa_yaml.py > output.yaml`, etc, etc.
