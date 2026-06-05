@@ -156,7 +156,7 @@ print('''
     address: 195
     raw_encode: HEXBYTES
     lambda: |-
-      uint16_t value = modbus_controller::word_from_hex_str(x, 0);
+      uint16_t value = modbus::helpers::word_from_hex_str(x, 0);
       switch (value) {{
         case 0: return std::string("Open");
         case 1: return std::string("Closed");
