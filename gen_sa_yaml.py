@@ -1,8 +1,28 @@
+# SUBS:
+
+# substitutions:
+#   name: solark-stats-sa1
+#   friendly_name: SolArk Stats SA1
+#   static_ip: 192.168.0.3
+#   gateway: 192.168.0.1
+#   subnet: 255.255.255.0
+#   api_key: "KRdmkbCh4KTyxUxzLYVjHjLH3wJIJEh7sGN+f/J//Pc="
+#   ota_pass: "676ad1f83d8f61e5537730d2b6a55f46"
+
+# substitutions:
+#   name: solark-stats-sa2
+#   friendly_name: SolArk Stats SA2
+#   static_ip: 192.168.0.4
+#   gateway: 192.168.0.1
+#   subnet: 255.255.255.0
+#   api_key: "IQlPPneFbznTPCOgixFHw+9eDFFw9esG52Jzv+XgjW4="
+#   ota_pass: "bd272b999fbb83e8055dc423ba252e3b"
+
 ## All my rig-a-ma-roll for the WESP32 device I'll be using
 print('''
-substitutions:
-  name: sol-ark-stats-sa1
-  friendly_name: SolArk Stats SA1
+#
+# SUBS ABOVE
+#
 
 esphome:
   name: ${name}
@@ -18,15 +38,15 @@ esp32:
   framework:
     type: arduino
 
-# Enable logging
 logger:
 
-# Enable Home Assistant API
 api:
+  encryption:
+    key: ${api_key}
 
-# Allow Over-The-Air updates
 ota:
-- platform: esphome
+  - platform: esphome
+    password: ${ota_pass}
 
 ## Disabled since this is ETHERNET based
 #improv_serial:
@@ -39,7 +59,11 @@ ethernet:
   type: "RTL8201"
   mdc_pin: GPIO16
   mdio_pin: GPIO17
-  clk_mode: GPIO0_IN
+  clk:
+    mode: CLK_EXT_IN
+    pin:
+      number: 0
+      ignore_strapping_warning: true
   phy_addr: 0
   phy_registers:
     - address: 0x10
