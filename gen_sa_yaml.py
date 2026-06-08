@@ -1,22 +1,45 @@
+import sys
+
+if len(sys.argv) < 2:
+    print("Error: Missing file argument!")
+    sys.exit(1)
+
+target = sys.argv[1]
+
+if target not in ['sa1', 'sa2']:
+    print("target must be sa1 or sa2!")
+    sys.exit(1)
+
+print(f"Generating to: {target}.yaml")
+
+# Open your log file (use 'w' to overwrite, or 'a' to append)
+sys.stdout = open(f"{target}.yaml", "w", encoding="utf-8")
+
 # SUBS:
 
-# substitutions:
-#   name: solark-stats-sa1
-#   friendly_name: SolArk Stats SA1
-#   static_ip: 192.168.0.3
-#   gateway: 192.168.0.1
-#   subnet: 255.255.255.0
-#   api_key: "KRdmkbCh4KTyxUxzLYVjHjLH3wJIJEh7sGN+f/J//Pc="
-#   ota_pass: "676ad1f83d8f61e5537730d2b6a55f46"
+if target == 'sa1':
+    print('''
+substitutions:
+  name: solark-stats-sa1
+  friendly_name: SolArk Stats SA1
+  static_ip: 192.168.0.3
+  gateway: 192.168.0.1
+  subnet: 255.255.255.0
+  api_key: "KRdmkbCh4KTyxUxzLYVjHjLH3wJIJEh7sGN+f/J//Pc="
+  ota_pass: "676ad1f83d8f61e5537730d2b6a55f46"
+    ''')
 
-# substitutions:
-#   name: solark-stats-sa2
-#   friendly_name: SolArk Stats SA2
-#   static_ip: 192.168.0.4
-#   gateway: 192.168.0.1
-#   subnet: 255.255.255.0
-#   api_key: "IQlPPneFbznTPCOgixFHw+9eDFFw9esG52Jzv+XgjW4="
-#   ota_pass: "bd272b999fbb83e8055dc423ba252e3b"
+else:
+    print('''
+substitutions:
+  name: solark-stats-sa2
+  friendly_name: SolArk Stats SA2
+  static_ip: 192.168.0.4
+  gateway: 192.168.0.1
+  subnet: 255.255.255.0
+  api_key: "IQlPPneFbznTPCOgixFHw+9eDFFw9esG52Jzv+XgjW4="
+  ota_pass: "bd272b999fbb83e8055dc423ba252e3b"
+    ''')
 
 ## All my rig-a-ma-roll for the WESP32 device I'll be using
 print('''
@@ -40,13 +63,17 @@ esphome:
       - binary_sensor.template.publish:
           id: device_online_status
           state: ON
-
+  
 esp32:
   board: esp32dev
   framework:
     type: arduino
 
 logger:
+  #level: VERY_VERBOSE   #useful for debugging modbus
+  # this turns off the warning about "slow" components; which modbus just takes time, yo. Chill.
+  logs:
+    component: ERROR
 
 api:
   encryption:
@@ -78,7 +105,7 @@ ethernet:
       value: 0x1FFA
       page_id: 0x07
   manual_ip:
-    static_ip: ${id_addr}
+    static_ip: ${static_ip}
     gateway: ${gateway}
     subnet: ${subnet}
 
@@ -106,25 +133,30 @@ uart:
 modbus:
   - id: modbus_sa
     uart_id: uart_modbus_client_sa
+    send_wait_time: 500ms
 
 modbus_controller:
 - id: modbus_client_sa
   modbus_id: modbus_sa
-  address: 0x1
+  address: 0x01  # it's ALWAYS 0x1; per the docs: 
+                 #
+                 #   The inverter’s Slave ID is 0x01. This cannot be changed. The “Modbus SN” under
+                 #   the “Parallel” tab does not affect the Slave ID for this map and is only relevant
+                 #   to parallel configurations
+                 #
+  command_throttle: 150ms
   on_online:
     then:
       - logger.log: "Controller back online!"
       - binary_sensor.template.publish:
           id: device_online_status
           state: ON
-      - script.stop: modbus_watchdog
   on_offline:
     then:
       - logger.log: "Controller goes offline!"
       - binary_sensor.template.publish:
           id: device_online_status
           state: OFF
-      - script.execute: modbus_watchdog
   on_command_sent:
     then:
       - logger.log: "Commands sent!"
@@ -155,15 +187,21 @@ print('''
     register_type: holding
     address: 195
     raw_encode: HEXBYTES
+    response_size: 2
     lambda: |-
-      uint16_t value = modbus::helpers::word_from_hex_str(x, 0);
-      switch (value) {{
-        case 0: return std::string("Open");
-        case 1: return std::string("Closed");
-        case 2: return std::string("No Connection");
-        case 3: return std::string("Closed, Generator is on");
-      }}
-      return std::string("Unknown State");;
+      // Extract the FIRST byte (index 0) from the hex string payload
+      uint8_t raw_byte = modbus::helpers::byte_from_hex_str(x, 0);
+      
+      // Isolate the low 4 bits by masking with 0x0F (binary 00001111)
+      uint8_t state = raw_byte & 0x0F;
+      
+      switch (state) {
+        case 0: return {"Open"};
+        case 1: return {"Closed"};
+        case 2: return {"No Connection"};
+        case 3: return {"Closed, Generator is on"};
+        default: return {"Unknown State"};
+      }
 ''')
 
 print('''
@@ -460,7 +498,7 @@ print('''
     register_type: holding
     register_count: 3
     accuracy_decimals: 1
-    value_type: U_QWORD  # just to, hopefully, inform everyone up the chain what's going on
+    force_new_range: true  # this one is quirky; force it to be fetched on its own
     lambda: |-
       uint64_t return_data = data[item->offset + 4] << 24
                            | data[item->offset + 5] << 16
@@ -470,6 +508,19 @@ print('''
     filters:
       - multiply: 0.1
 
+''')
+
+# Read the entire bitmask 64bit int into this field
+print(f'''
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Error Code Bitmask"
+    id: "error_code_bitmask"
+    address: 103
+    register_type: holding
+    value_type: U_QWORD_R
+    accuracy_decimals: 0
+    force_new_range: true
 ''')
 
 
@@ -492,8 +543,8 @@ print(f'''
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
     name: "Grid side relay status"
-    id: "sensor_103"
-    address: 103
+    id: "sensor_194"
+    address: 194
     register_type: holding
     lambda: |-
         if (static_cast<int>(data[1]) == 2) {{
@@ -542,9 +593,9 @@ alarms = {
 }
 
 
-# the modbus binarysensor only fetches a single word
-# so we can't read 4 registers, get a single 64bit value and bitmath against that
-# thus, we need to read of the registers and figure out what it would be if it WAS part
+# the modbus binarysensor only fetches a single word so we can't read 4 registers,
+# get a single 64bit value and bitmath against that. Instead, we've fetched the entire bitmask int
+# above in `error_code_bitmask` and can just bitmask our way into all the data
 #
 # I have also confirmed that the data is stored low word first; ie:
 #   combinedl = data['106'][2:].zfill(16) \
@@ -557,50 +608,47 @@ for original_bitmask in range(64): # the original bit ranges
 
     name = f'Alarm: F{original_bitmask + 1:02} ' + (alarms[original_bitmask] if original_bitmask in alarms else "UNDOCUMENTED")
 
-    modified_bitmask = original_bitmask
-    address = 103
-    while modified_bitmask > 15:
-        modified_bitmask = modified_bitmask - 16
-        address = address + 1
-
     print(f'''
-  - platform: modbus_controller
-    modbus_controller_id: modbus_client_sa
-    register_type: holding
+  - platform: template
     device_class: "safety"
     name: "{name}"
-    address: {address}  # position {original_bitmask}, adjusted to {modified_bitmask} for register {address}
-    bitmask: {format(1 << modified_bitmask, '#x')}''')
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << {original_bitmask})) != 0;''')
 
-# install a script that will NaN all the numbers if the system
-# goes "offline" so we don't report bogus data up to HomeAssistant
-print(f'''
-script:
-  - id: modbus_watchdog
-    mode: single 
-    then:
-      - delay: 5min # after the system goes "offline", this delays for 5 minutes to see if it was a fluke
-                    # the "online" will cancel this script (if running)
-      - logger.log: "Modbus timeout reached; resetting sensors"
-      - lambda: |-
-          // Force sensors to NaN (renders as 'unavailable' in Home Assistant)
-          ''')
-
-for (address, name, word_type) in kwhs:
-    print(f'''          id(sensor_{address}).publish_state(NAN);''')
-for (address, name, word_type) in watts:
-    print(f'''          id(sensor_{address}).publish_state(NAN);''')
-for (address, name) in voltages:
-    print(f'''          id(sensor_{address}).publish_state(NAN);''')
-for (address, name) in pvamps:
-    print(f'''          id(sensor_{address}).publish_state(NAN);''')
-for (address, name) in hertz:
-    print(f'''          id(sensor_{address}).publish_state(NAN);''')
-for (address, name) in otheramps:
-    print(f'''          id(sensor_{address}).publish_state(NAN);''')
-for (address) in [183, 184, 107, 91, 182, 78, 103]:  # manually derived sensors; nor part of above lists
-    print(f'''          id(sensor_{address}).publish_state(NAN);''')
-
-print(f'''
-      - logger.log: "...reset complete"
-''')
+###
+### I don't know exactly what's up; but setting some of these things to NaN is really fucking with the
+### incoming metrics to where I'm getting absolute garbage data.
+###
+# # install a script that will NaN all the numbers if the system
+# # goes "offline" so we don't report bogus data up to HomeAssistant
+# print(f'''
+# script:
+#   - id: modbus_watchdog
+#     mode: single
+#     then:
+#       - delay: 5min # after the system goes "offline", this delays for 5 minutes to see if it was a fluke
+#                     # the "online" will cancel this script (if running)
+#       - logger.log: "Modbus timeout reached; resetting sensors"
+#       - lambda: |-
+#           // Force sensors to NaN (renders as 'unavailable' in Home Assistant)
+#           ''')
+#
+# for (address, name, word_type) in kwhs:
+#     print(f'''          id(sensor_{address}).publish_state(NAN);''')
+# for (address, name, word_type) in watts:
+#     print(f'''          id(sensor_{address}).publish_state(NAN);''')
+# for (address, name) in voltages:
+#     print(f'''          id(sensor_{address}).publish_state(NAN);''')
+# for (address, name) in pvamps:
+#     print(f'''          id(sensor_{address}).publish_state(NAN);''')
+# for (address, name) in hertz:
+#     print(f'''          id(sensor_{address}).publish_state(NAN);''')
+# for (address, name) in otheramps:
+#     print(f'''          id(sensor_{address}).publish_state(NAN);''')
+# for (address) in [183, 184, 107, 91, 182, 78, 103]:  # manually derived sensors; nor part of above lists
+#     print(f'''          id(sensor_{address}).publish_state(NAN);''')
+#
+# print(f'''
+#       - logger.log: "...reset complete"
+# ''')

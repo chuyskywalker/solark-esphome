@@ -17,4 +17,20 @@ docker run -ti --rm -v ./:/app python bash
 cd /app
 ```
 
-Then execute `python gen_sa_yaml.py > output.yaml`, etc, etc.
+Then execute `python gen_sa_yaml.py sa1` or `python gen_sa_yaml.py sa2`, etc, etc.
+
+You can also install ESPHome to make the build/test cycle WAY faster
+
+```bash
+pip3 install esphome
+
+# for example
+# check the yaml
+esphome config sa1.yaml
+
+# connect to the running instance and stream logs
+esphome logs sa1.yaml
+
+# check the yaml, build it, upload it, stream log output after
+esphome run sa1.yaml
+```
