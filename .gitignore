@@ -1,6 +1,4 @@
 .esphome/*
-sa1.yaml
-sa2.yaml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
