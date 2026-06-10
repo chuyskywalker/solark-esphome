@@ -1,0 +1,1562 @@
+
+substitutions:
+  name: solark-stats-sa2
+  friendly_name: SolArk Stats SA2
+  static_ip: 192.168.0.4
+  gateway: 192.168.0.1
+  subnet: 255.255.255.0
+  api_key: "IQlPPneFbznTPCOgixFHw+9eDFFw9esG52Jzv+XgjW4="
+  ota_pass: "bd272b999fbb83e8055dc423ba252e3b"
+    
+
+#
+# SUBS ABOVE
+#
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2024.6.0
+  name_add_mac_suffix: false
+  project:
+    name: esphome.web
+    version: dev
+  # this is a bit of a hack; setting the status to online blindly.
+  # however, the offline'ing script will eventually clear it if, on startup, the modbus doesn't connect
+  on_boot:
+    priority: 600.0
+    then:
+      - binary_sensor.template.publish:
+          id: device_online_status
+          state: ON
+  
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  #level: VERY_VERBOSE   #useful for debugging modbus
+  # this turns off the warning about "slow" components; which modbus just takes time, yo. Chill.
+  logs:
+    component: ERROR
+
+api:
+  encryption:
+    key: ${api_key}
+
+ota:
+  - platform: esphome
+    password: ${ota_pass}
+
+## Disabled since this is ETHERNET based
+#improv_serial:
+#wifi:
+#  ap: {}
+#captive_portal:
+
+# for board rev.7 and up
+ethernet:
+  type: "RTL8201"
+  mdc_pin: GPIO16
+  mdio_pin: GPIO17
+  clk:
+    mode: CLK_EXT_IN
+    pin:
+      number: 0
+      ignore_strapping_warning: true
+  phy_addr: 0
+  phy_registers:
+    - address: 0x10
+      value: 0x1FFA
+      page_id: 0x07
+  manual_ip:
+    static_ip: ${static_ip}
+    gateway: ${gateway}
+    subnet: ${subnet}
+
+web_server:
+  port: 80
+  ota: False
+  version: 3
+  local: True
+
+# time:
+#   - platform: homeassistant
+#     id: homeassistant_time
+
+## MODBUS STUFF
+
+uart:
+  - id: uart_modbus_client_sa
+    rx_pin: 32
+    tx_pin: 23
+    baud_rate: 9600
+    data_bits: 8
+    parity: NONE
+    stop_bits: 1
+
+modbus:
+  - id: modbus_sa
+    uart_id: uart_modbus_client_sa
+    send_wait_time: 500ms
+
+modbus_controller:
+- id: modbus_client_sa
+  modbus_id: modbus_sa
+  address: 0x01  # it's ALWAYS 0x1; per the docs: 
+                 #
+                 #   The inverter’s Slave ID is 0x01. This cannot be changed. The “Modbus SN” under
+                 #   the “Parallel” tab does not affect the Slave ID for this map and is only relevant
+                 #   to parallel configurations
+                 #
+  command_throttle: 150ms
+  on_online:
+    then:
+      - logger.log: "Controller back online!"
+      - binary_sensor.template.publish:
+          id: device_online_status
+          state: ON
+  on_offline:
+    then:
+      - logger.log: "Controller goes offline!"
+      - binary_sensor.template.publish:
+          id: device_online_status
+          state: OFF
+  on_command_sent:
+    then:
+      - lambda: |-
+          ESP_LOGI("modbus_monitor", "Command dispatched -> FC: %u (0x%02X), Address: %u (0x%04X)", function_code, function_code, address, address);
+
+### Stats Below!
+
+
+
+text_sensor:
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Serial Number"
+    register_type: holding
+    address: 3
+    raw_encode: ANSI
+    response_size: 10
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Generator side relay status"
+    register_type: holding
+    address: 195
+    raw_encode: HEXBYTES
+    response_size: 2
+    lambda: |-
+      // Extract the FIRST byte (index 0) from the hex string payload
+      uint8_t raw_byte = modbus::helpers::byte_from_hex_str(x, 0);
+      
+      // Isolate the low 4 bits by masking with 0x0F (binary 00001111)
+      uint8_t state = raw_byte & 0x0F;
+      
+      switch (state) {
+        case 0: return {"Open"};
+        case 1: return {"Closed"};
+        case 2: return {"No Connection"};
+        case 3: return {"Closed, Generator is on"};
+        default: return {"Unknown State"};
+      }
+
+
+sensor:
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Day Active Power"
+    id: "sensor_60"
+    address: 60
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    register_type: holding
+    value_type: S_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Total Active Power"
+    id: "sensor_63"
+    address: 63
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    register_type: holding
+    value_type: S_DWORD_R
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Day Batt Charge Power"
+    id: "sensor_70"
+    address: 70
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Day Batt Discharge Power"
+    id: "sensor_71"
+    address: 71
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Total Batt charge Power"
+    id: "sensor_72"
+    address: 72
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    register_type: holding
+    value_type: U_DWORD_R
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Total Batt Discharge Power"
+    id: "sensor_74"
+    address: 74
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    register_type: holding
+    value_type: U_DWORD_R
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Day Grid Buy Power"
+    id: "sensor_76"
+    address: 76
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Day Grid Sell Power"
+    id: "sensor_77"
+    address: 77
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Total Grid Sell Power"
+    id: "sensor_81"
+    address: 81
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    register_type: holding
+    value_type: U_DWORD_R
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "SG: Day Load Power"
+    id: "sensor_84"
+    address: 84
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Total Load Power"
+    id: "sensor_85"
+    address: 85
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    register_type: holding
+    value_type: U_DWORD_R
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Total PV Power over all time"
+    id: "sensor_96"
+    address: 96
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    register_type: holding
+    value_type: U_DWORD_R
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Daily PV Power"
+    id: "sensor_108"
+    address: 108
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Gen or AC Coupled power input"
+    id: "sensor_166"
+    address: 166
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Grid side L1 power"
+    id: "sensor_167"
+    address: 167
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Grid side L2 power"
+    id: "sensor_168"
+    address: 168
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Total power of grid side L1-L2"
+    id: "sensor_169"
+    address: 169
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Grid external Limter1 power (CT1)"
+    id: "sensor_170"
+    address: 170
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Grid external Limter2 power (CT2)"
+    id: "sensor_171"
+    address: 171
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Grid external Total Power"
+    id: "sensor_172"
+    address: 172
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Inverter outputs L1 power"
+    id: "sensor_173"
+    address: 173
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Inverter outputs L2 power"
+    id: "sensor_174"
+    address: 174
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Inverter output Total power"
+    id: "sensor_175"
+    address: 175
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Load side L1 power"
+    id: "sensor_176"
+    address: 176
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Load side L2 power"
+    id: "sensor_177"
+    address: 177
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Load side Total power"
+    id: "sensor_178"
+    address: 178
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "PV1 input power"
+    id: "sensor_186"
+    address: 186
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "PV2 input power"
+    id: "sensor_187"
+    address: 187
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "PV3 input power"
+    id: "sensor_188"
+    address: 188
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "PV4 input power"
+    id: "sensor_189"
+    address: 189
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Battery output power"
+    id: "sensor_190"
+    address: 190
+    unit_of_measurement: "W"
+    device_class: "power"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "DC (PV) voltage 1"
+    id: "sensor_109"
+    address: 109
+    unit_of_measurement: "V"
+    device_class: "voltage"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "DC (PV) voltage 2"
+    id: "sensor_111"
+    address: 111
+    unit_of_measurement: "V"
+    device_class: "voltage"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "DC (PV) voltage 3"
+    id: "sensor_113"
+    address: 113
+    unit_of_measurement: "V"
+    device_class: "voltage"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Grid side voltage L1-N"
+    id: "sensor_150"
+    address: 150
+    unit_of_measurement: "V"
+    device_class: "voltage"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Grid side voltage L2-N"
+    id: "sensor_151"
+    address: 151
+    unit_of_measurement: "V"
+    device_class: "voltage"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Grid side voltage L1-L2"
+    id: "sensor_152"
+    address: 152
+    unit_of_measurement: "V"
+    device_class: "voltage"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Voltage at middle side of relay L1-L2"
+    id: "sensor_153"
+    address: 153
+    unit_of_measurement: "V"
+    device_class: "voltage"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Inverter output voltage L1-N"
+    id: "sensor_154"
+    address: 154
+    unit_of_measurement: "V"
+    device_class: "voltage"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Inverter output voltage L2 N"
+    id: "sensor_155"
+    address: 155
+    unit_of_measurement: "V"
+    device_class: "voltage"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Inverter output voltage L1 L2"
+    id: "sensor_156"
+    address: 156
+    unit_of_measurement: "V"
+    device_class: "voltage"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Load voltage L1"
+    id: "sensor_157"
+    address: 157
+    unit_of_measurement: "V"
+    device_class: "voltage"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Load voltage L2"
+    id: "sensor_158"
+    address: 158
+    unit_of_measurement: "V"
+    device_class: "voltage"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Gen Port Voltage L1-L2"
+    id: "sensor_181"
+    address: 181
+    unit_of_measurement: "V"
+    device_class: "voltage"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Battery voltage"
+    id: "sensor_183"
+    address: 183
+    unit_of_measurement: "V"
+    device_class: "voltage"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.01
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Battery capacity SOC"
+    id: "sensor_184"
+    address: 184
+    unit_of_measurement: "%"
+    device_class: "battery"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Corrected Batt Capacity"
+    id: "sensor_107"
+    address: 107
+    unit_of_measurement: "Ah"
+    device_class: "energy_storage"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "DC (PV) current 1"
+    id: "sensor_110"
+    address: 110
+    unit_of_measurement: "A"
+    device_class: "current"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "DC (PV) current 2"
+    id: "sensor_112"
+    address: 112
+    unit_of_measurement: "A"
+    device_class: "current"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "DC (PV) current 3"
+    id: "sensor_114"
+    address: 114
+    unit_of_measurement: "A"
+    device_class: "current"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.1
+
+    
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "IGBT Heat Sink"
+    id: "sensor_91"
+    register_type: holding
+    address: 91
+    unit_of_measurement: "°C"
+    device_class: "temperature"
+    state_class: "measurement"
+    value_type: U_WORD
+    filters:
+    - calibrate_linear:
+      - 438 -> -56.2
+      - 1000 -> 0
+      - 1505 -> 50.5
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Battery temperature"
+    id: "sensor_182"
+    address: 182
+    unit_of_measurement: "°C"
+    device_class: "temperature"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    #- offset: -1000  # the docs say to offset by 1000, but I was getting values like "250" when pulled raw
+    # which seems a whole lot more like *.1 instead.
+    - multiply: 0.1
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Grid frequency"
+    id: "sensor_79"
+    address: 79
+    unit_of_measurement: "Hz"
+    device_class: "frequency"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.01
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Load frequency"
+    id: "sensor_192"
+    address: 192
+    unit_of_measurement: "Hz"
+    device_class: "frequency"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.01
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Inverter output frequency"
+    id: "sensor_193"
+    address: 193
+    unit_of_measurement: "Hz"
+    device_class: "frequency"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.01
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Generator relay Frequency"
+    id: "sensor_196"
+    address: 196
+    unit_of_measurement: "Hz"
+    device_class: "frequency"
+    state_class: "measurement"
+    register_type: holding
+    value_type: U_WORD
+    filters:
+    - multiply: 0.01
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Grid side current L1"
+    id: "sensor_160"
+    address: 160
+    unit_of_measurement: "A"
+    device_class: "current"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+    filters:
+    - multiply: 0.01
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Grid side current L2"
+    id: "sensor_161"
+    address: 161
+    unit_of_measurement: "A"
+    device_class: "current"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+    filters:
+    - multiply: 0.01
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Grid external Limiter current L1"
+    id: "sensor_162"
+    address: 162
+    unit_of_measurement: "A"
+    device_class: "current"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+    filters:
+    - multiply: 0.01
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Grid external Limiter current L2"
+    id: "sensor_163"
+    address: 163
+    unit_of_measurement: "A"
+    device_class: "current"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+    filters:
+    - multiply: 0.01
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Inverter output current L1"
+    id: "sensor_164"
+    address: 164
+    unit_of_measurement: "A"
+    device_class: "current"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+    filters:
+    - multiply: 0.01
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Inverter output current L2"
+    id: "sensor_165"
+    address: 165
+    unit_of_measurement: "A"
+    device_class: "current"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+    filters:
+    - multiply: 0.01
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Load current L1"
+    id: "sensor_179"
+    address: 179
+    unit_of_measurement: "A"
+    device_class: "current"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+    filters:
+    - multiply: 0.01
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Load current L2"
+    id: "sensor_180"
+    address: 180
+    unit_of_measurement: "A"
+    device_class: "current"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+    filters:
+    - multiply: 0.01
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Battery output current"
+    id: "sensor_191"
+    address: 191
+    unit_of_measurement: "A"
+    device_class: "current"
+    state_class: "measurement"
+    register_type: holding
+    value_type: S_WORD
+    filters:
+    - multiply: 0.01
+
+
+
+  # https://community.home-assistant.io/t/esphome-modbus-and-non-sequential-low-high-registers/832600/6
+  #
+  # This value is STUPID. They took the high/low values of a 32bit int and split them across non-contiguous
+  # registers. Any modbus utility has the ability to say "grab a 8/16/32/64 bit value starting at X address"
+  # but none of them are setup to understand the frustrating non-contiguous split that SolArk did for 
+  # "Total Grid Buy Power" where it's low word is in register 78 and its high word is in 80, while register
+  # 79 (right in the middle) is Grid Hertz. Cool!
+  #
+  # Therefor, you must pull 3 registers and run a lambda to recombine the register 78 and 80 back
+  # into the sensible 32bit int it's supposed to be.
+  #
+  # UGH
+  #
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Total Grid Buy Power"
+    id: "sensor_78"
+    address: 78
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    register_type: holding
+    register_count: 3
+    accuracy_decimals: 1
+    force_new_range: true  # this one is quirky; force it to be fetched on its own
+    lambda: |-
+      uint64_t return_data = data[item->offset + 4] << 24
+                           | data[item->offset + 5] << 16
+                           | data[item->offset + 0] << 8
+                           | data[item->offset + 1];
+      return return_data;
+    filters:
+      - multiply: 0.1
+
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Error Code Bitmask"
+    id: "error_code_bitmask"
+    address: 103
+    register_type: holding
+    value_type: U_QWORD_R
+    accuracy_decimals: 0
+    force_new_range: true
+
+
+binary_sensor:
+
+
+  - platform: template
+    name: "Modbus Device Status"
+    id: device_online_status
+    device_class: connectivity
+
+
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Grid side relay status"
+    id: "sensor_194"
+    address: 194
+    register_type: holding
+    lambda: |-
+        if (static_cast<int>(data[1]) == 2) {
+            return true;
+        }
+        return false;
+
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F01 DC_Inversed_Failure"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 0)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F02 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 1)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F03 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 2)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F04 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 3)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F05 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 4)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F06 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 5)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F07 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 6)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F08 GFDI_Relay_Failure"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 7)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F09 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 8)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F10 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 9)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F11 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 10)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F12 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 11)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F13 Grid_Mode_changed"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 12)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F14 DC_OverCurr_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 13)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F15 AC_OverCurr_Failure"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 14)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F16 GFCI_Failure"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 15)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F17 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 16)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F18 HW_Ac_OverCurr_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 17)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F19 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 18)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F20 Tz_Dc_OverCurr_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 19)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F21 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 20)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F22 Tz_EmergStop_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 21)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F23 Tz_GFCI_OC_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 22)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F24 DC_Insulation_ISO_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 23)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F25 DC_Feedback_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 24)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F26 BusUnbalance_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 25)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F27 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 26)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F28 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 27)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F29 Parallel_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 28)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F30 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 29)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F31 Soft_Start_Failed"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 30)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F32 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 31)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F33 AC_OverCurr_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 32)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F34 AC_Overload_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 33)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F35 AC_NoUtility_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 34)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F36 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 35)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F37 DCLLC_Soft_Over_Cur"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 36)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F38 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 37)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F39 DCLLC_Over_Current"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 38)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F40 Batt_Over_Current"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 39)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F41 AC_WU_OverVolt_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 40)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F42 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 41)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F43 AC_VW_OverVolt_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 42)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F44 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 43)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F45 AC_UV_OverVolt_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 44)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F46 Parallel_Aux_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 45)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F47 AC_OverFreq_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 46)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F48 AC_UnderFreq_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 47)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F49 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 48)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F50 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 49)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F51 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 50)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F52 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 51)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F53 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 52)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F54 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 53)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F55 DC_VoltHigh_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 54)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F56 DC_VoltLow_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 55)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F57 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 56)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F58 AC_U_GridCurr_High_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 57)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F59 UNDOCUMENTED"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 58)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F60 Gen_Volt_or_Fre_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 59)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F61 Button_Manual_OFF"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 60)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F62 AC_B_InductCurr_High_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 61)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F63 Arc_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 62)) != 0;
+
+  - platform: template
+    device_class: "safety"
+    name: "Alarm: F64 Heatsink_HighTemp_Fault"
+    lambda: |-
+      uint64_t mask = id(error_code_bitmask).state;
+      return (mask & (1ULL << 63)) != 0;
