@@ -159,7 +159,8 @@ modbus_controller:
           state: OFF
   on_command_sent:
     then:
-      - logger.log: "Commands sent!"
+      - lambda: |-
+          ESP_LOGI("modbus_monitor", "Command dispatched -> FC: %u (0x%02X), Address: %u (0x%04X)", function_code, function_code, address, address);
 
 ### Stats Below!
 
