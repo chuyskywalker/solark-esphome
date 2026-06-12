@@ -209,24 +209,30 @@ print('''
 sensor:
 ''')
 
+
+# A number of these are removed because they track "total sums daily" which means
+# they reset to zero/near-zero once in a while. Since HA really only needs total
+# running values (which the "total" versions track), we don't need the dailies.
+# Just reduces the clutter.
 kwhs = [
-    (  60,  "Day Active Power"                , "S_WORD"),
-    (  63,  "Total Active Power"              , "S_DWORD_R"),
-    (  70,  "Day Batt Charge Power"           , "U_WORD"),
-    (  71,  "Day Batt Discharge Power"        , "U_WORD"),
+#   (  60,  "Day Active Power"                , "S_WORD"), # removed because, according to the docs, can techincally be negative; plus "day" stats aren't interesting
+#   (  63,  "Total Active Power"              , "S_DWORD_R"), # removed as potentially a negative value (which breaks the tracking lambda below) -- also not used in HA
+#   (  70,  "Day Batt Charge Power"           , "U_WORD"),  # removed daily
+#   (  71,  "Day Batt Discharge Power"        , "U_WORD"),  # removed daily
     (  72,  "Total Batt charge Power"         , "U_DWORD_R"),
     (  74,  "Total Batt Discharge Power"      , "U_DWORD_R"),
-    (  76,  "Day Grid Buy Power"              , "U_WORD"),
-    (  77,  "Day Grid Sell Power"             , "U_WORD"),
-## I have no idea how to deal with this -- the split of the low/high values across non-sequential registers and the register in the middle is Grid Frequency.
+#   (  76,  "Day Grid Buy Power"              , "U_WORD"),  # removed daily
+#   (  77,  "Day Grid Sell Power"             , "U_WORD"),  # removed daily
+## OMG - The data for 'Total Grid Buy Power' is split across **non-sequential** registers
+## and the register in the middle is Grid Frequency. Check after the loop for how this
+## has to be dealt with. It's a doozy.
 # | 78             | Total Grid Buy Power (Wh) low word          | R              | [0,65535]       | 0.1kwh         |                                                                                                                 |
 # | 80             | Total Grid Buy Power (Wh) high word         | R              | [0,65535]       | 0.1kwh         |                                                                                                                 |
-# EDIT: I kinda figured something out, but MAN it's a hack. See lower in the file...
     (  81,  "Total Grid Sell Power"           , "U_DWORD_R"),
-    (  84,  "SG: Day Load Power"              , "U_WORD"),
+#   (  84,  "SG: Day Load Power"              , "U_WORD"),  # frankly, no idea what this is, plus it's a "daily"
     (  85,  "Total Load Power"                , "U_DWORD_R"),
     (  96,  "Total PV Power over all time"    , "U_DWORD_R"),
-    ( 108,  "Daily PV Power"                  , "U_WORD"),
+#   ( 108,  "Daily PV Power"                  , "U_WORD"),  # removed daily
 ]
 
 for (address, name, word_type) in kwhs:
