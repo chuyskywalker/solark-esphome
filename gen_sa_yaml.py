@@ -249,6 +249,70 @@ for (address, name, word_type) in kwhs:
     value_type: {word_type}
     filters:
     - multiply: 0.1
+    - lambda: |-
+        static float last_stable = 0.0;
+        if (last_stable == 0.0) {{
+          last_stable = x;
+          return x;
+        }}
+        // Discard if the reading drops or jumps by an impossible 100+ kWh
+        if (x < last_stable || (x - last_stable) > 100.0) {{
+          ESP_LOGE("value_monitor", "Sensor '{name}' ({address}) failed the value check; previous: %u, now: %u", last_stable, x);
+          return {{}};
+        }}
+        last_stable = x;
+        return x;
+''')
+
+print('''
+
+  # https://community.home-assistant.io/t/esphome-modbus-and-non-sequential-low-high-registers/832600/6
+  #
+  # This value is STUPID. They took the high/low values of a 32bit int and split them across non-contiguous
+  # registers. Any modbus utility has the ability to say "grab a 8/16/32/64 bit value starting at X address"
+  # but none of them are setup to understand the frustrating non-contiguous split that SolArk did for 
+  # "Total Grid Buy Power" where it's low word is in register 78 and its high word is in 80, while register
+  # 79 (right in the middle) is Grid Hertz. Cool!
+  #
+  # Therefor, you must pull 3 registers and run a lambda to recombine the register 78 and 80 back
+  # into the sensible 32bit int it's supposed to be.
+  #
+  # UGH
+  #
+  - platform: modbus_controller
+    modbus_controller_id: modbus_client_sa
+    name: "Total Grid Buy Power"
+    id: "sensor_78"
+    address: 78
+    unit_of_measurement: "kWh"
+    device_class: "energy"
+    state_class: "total_increasing"
+    register_type: holding
+    register_count: 3
+    accuracy_decimals: 1
+    force_new_range: true  # this one is quirky; force it to be fetched on its own
+    lambda: |-
+      uint64_t return_data = data[item->offset + 4] << 24
+                           | data[item->offset + 5] << 16
+                           | data[item->offset + 0] << 8
+                           | data[item->offset + 1];
+      return return_data;
+    filters:
+    - multiply: 0.1
+    - lambda: |-
+        static float last_stable = 0.0;
+        if (last_stable == 0.0) {{
+          last_stable = x;
+          return x;
+        }}
+        // Discard if the reading drops or jumps by an impossible 100+ kWh
+        if (x < last_stable || (x - last_stable) > 100.0) {{
+          ESP_LOGE("value_monitor", "Sensor 'Total Grid Buy Power' (78'ish) failed the value check; previous: %u, now: %u", last_stable, x);
+          return {{}};
+        }}
+        last_stable = x;
+        return x;
+
 ''')
 
 watts = [
@@ -476,45 +540,6 @@ for (address, name) in otheramps:
     value_type: S_WORD
     filters:
     - multiply: 0.01
-''')
-
-
-print('''
-
-  # https://community.home-assistant.io/t/esphome-modbus-and-non-sequential-low-high-registers/832600/6
-  #
-  # This value is STUPID. They took the high/low values of a 32bit int and split them across non-contiguous
-  # registers. Any modbus utility has the ability to say "grab a 8/16/32/64 bit value starting at X address"
-  # but none of them are setup to understand the frustrating non-contiguous split that SolArk did for 
-  # "Total Grid Buy Power" where it's low word is in register 78 and its high word is in 80, while register
-  # 79 (right in the middle) is Grid Hertz. Cool!
-  #
-  # Therefor, you must pull 3 registers and run a lambda to recombine the register 78 and 80 back
-  # into the sensible 32bit int it's supposed to be.
-  #
-  # UGH
-  #
-  - platform: modbus_controller
-    modbus_controller_id: modbus_client_sa
-    name: "Total Grid Buy Power"
-    id: "sensor_78"
-    address: 78
-    unit_of_measurement: "kWh"
-    device_class: "energy"
-    state_class: "total_increasing"
-    register_type: holding
-    register_count: 3
-    accuracy_decimals: 1
-    force_new_range: true  # this one is quirky; force it to be fetched on its own
-    lambda: |-
-      uint64_t return_data = data[item->offset + 4] << 24
-                           | data[item->offset + 5] << 16
-                           | data[item->offset + 0] << 8
-                           | data[item->offset + 1];
-      return return_data;
-    filters:
-      - multiply: 0.1
-
 ''')
 
 # Read the entire bitmask 64bit int into this field
