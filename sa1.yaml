@@ -171,62 +171,6 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
-    name: "Day Active Power"
-    id: "sensor_60"
-    address: 60
-    unit_of_measurement: "kWh"
-    device_class: "energy"
-    state_class: "total_increasing"
-    register_type: holding
-    value_type: S_WORD
-    filters:
-    - multiply: 0.1
-
-
-  - platform: modbus_controller
-    modbus_controller_id: modbus_client_sa
-    name: "Total Active Power"
-    id: "sensor_63"
-    address: 63
-    unit_of_measurement: "kWh"
-    device_class: "energy"
-    state_class: "total_increasing"
-    register_type: holding
-    value_type: S_DWORD_R
-    filters:
-    - multiply: 0.1
-
-
-  - platform: modbus_controller
-    modbus_controller_id: modbus_client_sa
-    name: "Day Batt Charge Power"
-    id: "sensor_70"
-    address: 70
-    unit_of_measurement: "kWh"
-    device_class: "energy"
-    state_class: "total_increasing"
-    register_type: holding
-    value_type: U_WORD
-    filters:
-    - multiply: 0.1
-
-
-  - platform: modbus_controller
-    modbus_controller_id: modbus_client_sa
-    name: "Day Batt Discharge Power"
-    id: "sensor_71"
-    address: 71
-    unit_of_measurement: "kWh"
-    device_class: "energy"
-    state_class: "total_increasing"
-    register_type: holding
-    value_type: U_WORD
-    filters:
-    - multiply: 0.1
-
-
-  - platform: modbus_controller
-    modbus_controller_id: modbus_client_sa
     name: "Total Batt charge Power"
     id: "sensor_72"
     address: 72
@@ -237,6 +181,19 @@ sensor:
     value_type: U_DWORD_R
     filters:
     - multiply: 0.1
+    - lambda: |-
+        static float last_stable = 0.0;
+        if (last_stable == 0.0) {
+          last_stable = x;
+          return x;
+        }
+        // Discard if the reading drops or jumps by an impossible 100+ kWh
+        if (x < last_stable || (x - last_stable) > 100.0) {
+          ESP_LOGE("value_monitor", "Sensor 'Total Batt charge Power' (72) failed the value check; previous: %u, now: %u", last_stable, x);
+          return {};
+        }
+        last_stable = x;
+        return x;
 
 
   - platform: modbus_controller
@@ -251,34 +208,19 @@ sensor:
     value_type: U_DWORD_R
     filters:
     - multiply: 0.1
-
-
-  - platform: modbus_controller
-    modbus_controller_id: modbus_client_sa
-    name: "Day Grid Buy Power"
-    id: "sensor_76"
-    address: 76
-    unit_of_measurement: "kWh"
-    device_class: "energy"
-    state_class: "total_increasing"
-    register_type: holding
-    value_type: U_WORD
-    filters:
-    - multiply: 0.1
-
-
-  - platform: modbus_controller
-    modbus_controller_id: modbus_client_sa
-    name: "Day Grid Sell Power"
-    id: "sensor_77"
-    address: 77
-    unit_of_measurement: "kWh"
-    device_class: "energy"
-    state_class: "total_increasing"
-    register_type: holding
-    value_type: U_WORD
-    filters:
-    - multiply: 0.1
+    - lambda: |-
+        static float last_stable = 0.0;
+        if (last_stable == 0.0) {
+          last_stable = x;
+          return x;
+        }
+        // Discard if the reading drops or jumps by an impossible 100+ kWh
+        if (x < last_stable || (x - last_stable) > 100.0) {
+          ESP_LOGE("value_monitor", "Sensor 'Total Batt Discharge Power' (74) failed the value check; previous: %u, now: %u", last_stable, x);
+          return {};
+        }
+        last_stable = x;
+        return x;
 
 
   - platform: modbus_controller
@@ -293,20 +235,19 @@ sensor:
     value_type: U_DWORD_R
     filters:
     - multiply: 0.1
-
-
-  - platform: modbus_controller
-    modbus_controller_id: modbus_client_sa
-    name: "SG: Day Load Power"
-    id: "sensor_84"
-    address: 84
-    unit_of_measurement: "kWh"
-    device_class: "energy"
-    state_class: "total_increasing"
-    register_type: holding
-    value_type: U_WORD
-    filters:
-    - multiply: 0.1
+    - lambda: |-
+        static float last_stable = 0.0;
+        if (last_stable == 0.0) {
+          last_stable = x;
+          return x;
+        }
+        // Discard if the reading drops or jumps by an impossible 100+ kWh
+        if (x < last_stable || (x - last_stable) > 100.0) {
+          ESP_LOGE("value_monitor", "Sensor 'Total Grid Sell Power' (81) failed the value check; previous: %u, now: %u", last_stable, x);
+          return {};
+        }
+        last_stable = x;
+        return x;
 
 
   - platform: modbus_controller
@@ -321,6 +262,19 @@ sensor:
     value_type: U_DWORD_R
     filters:
     - multiply: 0.1
+    - lambda: |-
+        static float last_stable = 0.0;
+        if (last_stable == 0.0) {
+          last_stable = x;
+          return x;
+        }
+        // Discard if the reading drops or jumps by an impossible 100+ kWh
+        if (x < last_stable || (x - last_stable) > 100.0) {
+          ESP_LOGE("value_monitor", "Sensor 'Total Load Power' (85) failed the value check; previous: %u, now: %u", last_stable, x);
+          return {};
+        }
+        last_stable = x;
+        return x;
 
 
   - platform: modbus_controller
@@ -335,20 +289,69 @@ sensor:
     value_type: U_DWORD_R
     filters:
     - multiply: 0.1
+    - lambda: |-
+        static float last_stable = 0.0;
+        if (last_stable == 0.0) {
+          last_stable = x;
+          return x;
+        }
+        // Discard if the reading drops or jumps by an impossible 100+ kWh
+        if (x < last_stable || (x - last_stable) > 100.0) {
+          ESP_LOGE("value_monitor", "Sensor 'Total PV Power over all time' (96) failed the value check; previous: %u, now: %u", last_stable, x);
+          return {};
+        }
+        last_stable = x;
+        return x;
 
 
+
+  # https://community.home-assistant.io/t/esphome-modbus-and-non-sequential-low-high-registers/832600/6
+  #
+  # This value is STUPID. They took the high/low values of a 32bit int and split them across non-contiguous
+  # registers. Any modbus utility has the ability to say "grab a 8/16/32/64 bit value starting at X address"
+  # but none of them are setup to understand the frustrating non-contiguous split that SolArk did for 
+  # "Total Grid Buy Power" where it's low word is in register 78 and its high word is in 80, while register
+  # 79 (right in the middle) is Grid Hertz. Cool!
+  #
+  # Therefor, you must pull 3 registers and run a lambda to recombine the register 78 and 80 back
+  # into the sensible 32bit int it's supposed to be.
+  #
+  # UGH
+  #
   - platform: modbus_controller
     modbus_controller_id: modbus_client_sa
-    name: "Daily PV Power"
-    id: "sensor_108"
-    address: 108
+    name: "Total Grid Buy Power"
+    id: "sensor_78"
+    address: 78
     unit_of_measurement: "kWh"
     device_class: "energy"
     state_class: "total_increasing"
     register_type: holding
-    value_type: U_WORD
+    register_count: 3
+    accuracy_decimals: 1
+    force_new_range: true  # this one is quirky; force it to be fetched on its own
+    lambda: |-
+      uint64_t return_data = data[item->offset + 4] << 24
+                           | data[item->offset + 5] << 16
+                           | data[item->offset + 0] << 8
+                           | data[item->offset + 1];
+      return return_data;
     filters:
     - multiply: 0.1
+    - lambda: |-
+        static float last_stable = 0.0;
+        if (last_stable == 0.0) {{
+          last_stable = x;
+          return x;
+        }}
+        // Discard if the reading drops or jumps by an impossible 100+ kWh
+        if (x < last_stable || (x - last_stable) > 100.0) {{
+          ESP_LOGE("value_monitor", "Sensor 'Total Grid Buy Power' (78'ish) failed the value check; previous: %u, now: %u", last_stable, x);
+          return {{}};
+        }}
+        last_stable = x;
+        return x;
+
 
 
   - platform: modbus_controller
@@ -1041,43 +1044,6 @@ sensor:
     value_type: S_WORD
     filters:
     - multiply: 0.01
-
-
-
-  # https://community.home-assistant.io/t/esphome-modbus-and-non-sequential-low-high-registers/832600/6
-  #
-  # This value is STUPID. They took the high/low values of a 32bit int and split them across non-contiguous
-  # registers. Any modbus utility has the ability to say "grab a 8/16/32/64 bit value starting at X address"
-  # but none of them are setup to understand the frustrating non-contiguous split that SolArk did for 
-  # "Total Grid Buy Power" where it's low word is in register 78 and its high word is in 80, while register
-  # 79 (right in the middle) is Grid Hertz. Cool!
-  #
-  # Therefor, you must pull 3 registers and run a lambda to recombine the register 78 and 80 back
-  # into the sensible 32bit int it's supposed to be.
-  #
-  # UGH
-  #
-  - platform: modbus_controller
-    modbus_controller_id: modbus_client_sa
-    name: "Total Grid Buy Power"
-    id: "sensor_78"
-    address: 78
-    unit_of_measurement: "kWh"
-    device_class: "energy"
-    state_class: "total_increasing"
-    register_type: holding
-    register_count: 3
-    accuracy_decimals: 1
-    force_new_range: true  # this one is quirky; force it to be fetched on its own
-    lambda: |-
-      uint64_t return_data = data[item->offset + 4] << 24
-                           | data[item->offset + 5] << 16
-                           | data[item->offset + 0] << 8
-                           | data[item->offset + 1];
-      return return_data;
-    filters:
-      - multiply: 0.1
-
 
 
   - platform: modbus_controller
