@@ -166,6 +166,14 @@ modbus_controller:
 
 ''')
 
+print(f'''
+button:
+  - platform: template
+    name: "Send Test Message"
+    on_press:
+      - lambda: 'id(log_to_ha).execute("this is a test message from {target}");'
+''')
+
 # Begin the sensors; first text, then floats, then binary
 print('''
 text_sensor:
