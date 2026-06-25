@@ -250,14 +250,27 @@ for (address, name, word_type) in kwhs:
     filters:
     - multiply: 0.1
     - lambda: |-
+        // if the value is NaN (not a number); then dip out entirely -- bad read
+        if (std::isnan(x)) {{
+          id(log_to_ha).execute("Sensor '{name}' ({address}) received NAN from Modbus");
+          return {{}}; // Discard the invalid reading entirely
+        }}
+        if (x == 0.0) {{
+          id(log_to_ha).execute("Sensor '{name}' ({address}) received 0.0; bogus value skipped");
+          return {{}}; // Discard the invalid reading entirely
+        }}
+        // track the "last stable" known value so we can...
         static float last_stable = 0.0;
-        if (last_stable == 0.0) {{
+        if (last_stable == 0.0) {{ // first time? use it and we're out!
           last_stable = x;
           return x;
         }}
-        // Discard if the reading drops or jumps by an impossible 100+ kWh
+        // ...discard if the reading zero's out or jumps by an impossible 100+ kWh
+        // protects against bad reads, bit flips, noise causing weird nonsense. 
+        // modbus DOES have CRC's, but...I've seen some WEIRD stuff.
         if (x < last_stable || (x - last_stable) > 100.0) {{
-          ESP_LOGE("value_monitor", "Sensor '{name}' ({address}) failed the value check; previous: %u, now: %u", last_stable, x);
+          std::string log_msg = str_sprintf("Sensor '{name}' ({address}) failed the value check; previous: %.1f, now: %.1f", last_stable, x);
+          id(log_to_ha).execute(log_msg);
           return {{}};
         }}
         last_stable = x;
@@ -300,16 +313,25 @@ print('''
     filters:
     - multiply: 0.1
     - lambda: |-
+        if (std::isnan(x)) {
+          id(log_to_ha).execute("Sensor 'Total Grid Buy Power' (78'ish) received NAN from Modbus");
+          return {}; // Discard the invalid reading entirely
+        }
+        if (x == 0.0) {
+          id(log_to_ha).execute("Sensor 'Total Grid Buy Power' (78'ish) received 0.0; bogus value skipped");
+          return {}; // Discard the invalid reading entirely
+        }
         static float last_stable = 0.0;
-        if (last_stable == 0.0) {{
+        if (last_stable == 0.0) {
           last_stable = x;
           return x;
-        }}
+        }
         // Discard if the reading drops or jumps by an impossible 100+ kWh
-        if (x < last_stable || (x - last_stable) > 100.0) {{
-          ESP_LOGE("value_monitor", "Sensor 'Total Grid Buy Power' (78'ish) failed the value check; previous: %u, now: %u", last_stable, x);
-          return {{}};
-        }}
+        if (x < last_stable || (x - last_stable) > 100.0) {
+          std::string log_msg = str_sprintf("Sensor 'Total Grid Buy Power' (78'ish) failed the value check; previous: %.1f, now: %.1f", last_stable, x);
+          id(log_to_ha).execute(log_msg);
+          return {};
+        }
         last_stable = x;
         return x;
 
@@ -647,6 +669,29 @@ for original_bitmask in range(64): # the original bit ranges
     lambda: |-
       uint64_t mask = id(error_code_bitmask).state;
       return (mask & (1ULL << {original_bitmask})) != 0;''')
+
+
+print(f'''
+
+script:
+  - id: log_to_ha
+    mode: queued
+    parameters:
+      message: string
+    then:
+      - logger.log:
+          level: ERROR
+          tag: "error_tracking"
+          format: "%s"
+          args: [ 'message.c_str()' ]
+      - homeassistant.service:
+          service: system_log.write
+          data:
+            message: !lambda 'return message;'
+            level: error
+            logger: esphome.custom_device_{target} # Helps you filter in HA
+
+''')
 
 ###
 ### I don't know exactly what's up; but setting some of these things to NaN is really fucking with the
